@@ -1,0 +1,1036 @@
+import { Command } from 'commander';
+import ora, { type Ora, type Options as OraOptions } from 'ora';
+import cliCursor from 'cli-cursor';
+import chalk from 'chalk';
+import figlet from 'figlet';
+import input from '@inquirer/input';
+import confirm from '@inquirer/confirm';
+import select from '@inquirer/select';
+import checkbox from '@inquirer/checkbox';
+import password from '@inquirer/password';
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type {
+	CliToolsOptions,
+	Logger,
+	LogLevel,
+	CliToolsPlugin,
+	CliToolsEventMap,
+	CliToolsEventHandler,
+	ChoiceOption,
+	PromptInputOptions,
+	PromptPasswordOptions,
+	LoadConfigOptions,
+	ResolvedConfig,
+	OptionValue,
+} from './types.js';
+
+const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
+	debug: 0,
+	info: 1,
+	warn: 2,
+	error: 3,
+};
+
+/**
+ * CLI 工具库主类
+ *
+ * 封装 commander、@inquirer/prompts、ora、chalk、figlet、cli-cursor，
+ * 提供链式 API、工厂模式、事件系统与插件机制。
+ *
+ * @example
+ * ```ts
+ * const cli = CliTools.create({
+ *   commandName: 'my-cli',
+ *   commandDescription: '我的CLI工具',
+ * });
+ *
+ * cli
+ *   .printBanner('My App')
+ *   .addOption('-d, --debug', '调试模式')
+ *   .onAction(async (opts, cmd) => {
+ *     if (opts.debug) cli.success('调试已开启');
+ *   });
+ *
+ * cli.parse();
+ * ```
+ *
+ * @public
+ */
+export class CliTools {
+	private _program: Command;
+	private _spinner: Ora | null = null;
+	private _options: Required<Omit<CliToolsOptions, 'logger' | 'plugins'>> & { logger: Logger };
+	private _cursorHidden = false;
+	private _exitHandlerRegistered = false;
+	private _plugins: CliToolsPlugin[] = [];
+	private _eventHandlers = new Map<string, Set<CliToolsEventHandler>>();
+	private _config: Record<string, unknown> = {};
+
+	private constructor(options: CliToolsOptions = {}) {
+		this._options = {
+			color: options.color ?? true,
+			cursor: options.cursor ?? true,
+			commandName: options.commandName ?? 'cli-tools',
+			commandDescription: options.commandDescription ?? 'CLI 工具库',
+			logger: options.logger ?? console,
+		};
+
+		this._program = new Command();
+		this._program.name(this._options.commandName);
+		this._program.description(this._options.commandDescription);
+
+		if (!this._options.color) {
+			chalk.level = 0;
+		}
+		if (!this._options.cursor) {
+			this._hideCursor();
+		}
+
+		if (options.plugins) {
+			for (const plugin of options.plugins) {
+				this.use(plugin);
+			}
+		}
+
+		this._emit('init');
+	}
+
+	// ═══════════════════════════════════════════
+	//  工厂模式
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 工厂方法：创建 CliTools 实例
+	 *
+	 * @param options - 配置选项
+	 * @returns CliTools 实例
+	 *
+	 * @example
+	 * ```ts
+	 * const cli = CliTools.create({
+	 *   commandName: 'my-cli',
+	 *   commandDescription: '我的CLI工具',
+	 *   logger: myLogger,
+	 *   plugins: [myPlugin],
+	 * });
+	 * ```
+	 */
+	static create(options?: CliToolsOptions): CliTools {
+		return new CliTools(options);
+	}
+
+	// ═══════════════════════════════════════════
+	//  事件系统
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 监听事件
+	 *
+	 * @param event - 事件名称
+	 * @param handler - 事件处理器
+	 * @returns 当前实例（支持链式调用）
+	 *
+	 * @example
+	 * ```ts
+	 * cli.on('spinner:stop', () => console.log('Spinner 已停止'));
+	 * cli.on('error', ({ error }) => console.error(error));
+	 * ```
+	 */
+	on<K extends keyof CliToolsEventMap>(event: K, handler: CliToolsEventHandler<CliToolsEventMap[K]>): this {
+		if (!this._eventHandlers.has(event)) {
+			this._eventHandlers.set(event, new Set());
+		}
+		this._eventHandlers.get(event)!.add(handler as CliToolsEventHandler);
+		return this;
+	}
+
+	/**
+	 * 取消监听事件
+	 *
+	 * @param event - 事件名称
+	 * @param handler - 要移除的事件处理器
+	 * @returns 当前实例
+	 */
+	off<K extends keyof CliToolsEventMap>(event: K, handler: CliToolsEventHandler<CliToolsEventMap[K]>): this {
+		this._eventHandlers.get(event)?.delete(handler as CliToolsEventHandler);
+		return this;
+	}
+
+	/**
+	 * 触发事件（仅内部使用）
+	 *
+	 * @private
+	 */
+	private _emit<K extends keyof CliToolsEventMap>(event: K, data?: CliToolsEventMap[K]): void {
+		const handlers = this._eventHandlers.get(event);
+		if (!handlers) return;
+		for (const handler of handlers) {
+			try {
+				handler(data as never);
+			} catch (e) {
+				this._options.logger.error?.(`[Event:${event}] Handler error:`, e);
+			}
+		}
+	}
+
+	// ═══════════════════════════════════════════
+	//  插件系统
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 注册插件
+	 *
+	 * @param plugin - 插件实例
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * const myPlugin: CliToolsPlugin = {
+	 *   name: 'my-plugin',
+	 *   install(cli) {
+	 *     cli.on('init', () => console.log('Plugin loaded'));
+	 *   },
+	 * };
+	 * cli.use(myPlugin);
+	 * ```
+	 */
+	async use(plugin: CliToolsPlugin): Promise<this> {
+		if (this._plugins.some(p => p.name === plugin.name)) {
+			this._logDebug(`Plugin "${plugin.name}" already loaded, skipping`);
+			return this;
+		}
+		this._plugins.push(plugin);
+		this._emit('plugin:load', { name: plugin.name });
+		await plugin.install(this);
+		this._logDebug(`Plugin "${plugin.name}" loaded`);
+		return this;
+	}
+
+	/**
+	 * 获取已加载的插件列表
+	 *
+	 * @returns 插件名称数组
+	 */
+	getPlugins(): string[] {
+		return this._plugins.map(p => p.name);
+	}
+
+	// ═══════════════════════════════════════════
+	//  配置文件加载
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 加载配置文件
+	 *
+	 * 支持 JSON 格式的配置文件。按 sources 顺序查找，优先使用第一个找到的文件。
+	 *
+	 * @param options - 配置加载选项
+	 * @returns 解析后的配置结果，未找到文件则返回 defaults
+	 *
+	 * @example
+	 * ```ts
+	 * const { config } = await cli.loadConfig({
+	 *   sources: ['.myclirc', 'package.json#myCli'],
+	 *   defaults: { theme: 'dark', verbose: false },
+	 * });
+	 * console.log(config.theme); // 'dark'
+	 * ```
+	 */
+	async loadConfig(options: LoadConfigOptions = {}): Promise<ResolvedConfig> {
+		const { sources = [], defaults = {}, mergeDefaults = true } = options;
+
+		for (const source of sources) {
+			const [filePath, jsonKey] = source.split('#');
+			const fullPath = resolve(filePath);
+
+			if (!existsSync(fullPath)) continue;
+
+			try {
+				const raw = readFileSync(fullPath, 'utf-8');
+				let parsed: Record<string, unknown> = JSON.parse(raw);
+
+				if (jsonKey && typeof parsed === 'object' && parsed !== null) {
+					parsed = (parsed[jsonKey] as Record<string, unknown>) ?? {};
+				}
+
+				const config = mergeDefaults ? { ...defaults, ...parsed } : parsed;
+				this._config = config;
+				this._logDebug(`Config loaded from ${source}`);
+				return { source, config };
+			} catch (e) {
+				this._options.logger.error?.(`Failed to load config from ${source}:`, e);
+			}
+		}
+
+		this._config = { ...defaults };
+		return { config: { ...defaults } };
+	}
+
+	/**
+	 * 获取已加载的配置
+	 *
+	 * @returns 当前配置对象
+	 */
+	getConfig(): Record<string, unknown> {
+		return { ...this._config };
+	}
+
+	/**
+	 * 获取配置值（支持类型断言）
+	 *
+	 * @param key - 配置键名
+	 * @param defaultValue - 默认值
+	 * @returns 配置值
+	 *
+	 * @example
+	 * ```ts
+	 * const theme = cli.getConfigValue<string>('theme', 'light');
+	 * ```
+	 */
+	getConfigValue<T>(key: string, defaultValue?: T): T {
+		const value = this._config[key];
+		return (value !== undefined ? value : defaultValue) as T;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Commander 封装（链式）
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 设置命令名称
+	 *
+	 * @param name - 命令名称
+	 * @returns 当前实例
+	 */
+	setName(name: string): this {
+		this._program.name(name);
+		return this;
+	}
+
+	/**
+	 * 设置命令版本号
+	 *
+	 * @param version - 版本号字符串
+	 * @returns 当前实例
+	 */
+	setVersion(version: string): this {
+		this._program.version(version);
+		return this;
+	}
+
+	/**
+	 * 设置命令描述
+	 *
+	 * @param description - 描述文本
+	 * @returns 当前实例
+	 */
+	setDescription(description: string): this {
+		this._program.description(description);
+		return this;
+	}
+
+	/**
+	 * 添加命令行选项
+	 *
+	 * @param flags - 选项标志（如 `'-d, --debug'`）
+	 * @param description - 选项描述
+	 * @param defaultValue - 默认值（仅支持 string | boolean | number）
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.addOption('-n, --name <name>', '你的名字', 'World');
+	 * cli.addOption('-d, --debug', '调试模式');
+	 * cli.addOption('-p, --port <port>', '端口号', 3000);
+	 * ```
+	 */
+	addOption(flags: string, description: string, defaultValue?: OptionValue): this {
+		if (typeof defaultValue === 'number') {
+			this._program.option(flags, description, (val: string) => Number(val), defaultValue);
+		} else {
+			this._program.option(flags, description, defaultValue);
+		}
+		return this;
+	}
+
+	/**
+	 * 添加命令行参数
+	 *
+	 * @param name - 参数名称（如 `'<file>'` 或 `'[file]'`）
+	 * @param description - 参数描述
+	 * @returns 当前实例
+	 */
+	addArgument(name: string, description: string): this {
+		this._program.argument(name, description);
+		return this;
+	}
+
+	/**
+	 * 注册子命令
+	 *
+	 * @param name - 子命令名称
+	 * @param description - 子命令描述
+	 * @param action - 子命令执行回调
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.addCommand('init', '初始化项目', async (options, cmd) => {
+	 *   console.log('项目已初始化');
+	 * });
+	 * ```
+	 */
+	addCommand(name: string, description: string, action: (...args: unknown[]) => void | Promise<void>): this {
+		this._program.command(name).description(description).action(action as (...a: unknown[]) => void);
+		return this;
+	}
+
+	/**
+	 * 设置主命令的执行回调
+	 *
+	 * @param action - 执行回调，参数为解析后的 options 和 Command 实例
+	 * @returns 当前实例
+	 */
+	onAction(action: (options: Record<string, unknown>, command: Command) => void | Promise<void>): this {
+		this._program.action((...args: [string[], Command]) => {
+			const command = args[1];
+			const opts = command.opts();
+			this._emit('parse:after');
+			return action(opts as Record<string, unknown>, command);
+		});
+		return this;
+	}
+
+	/**
+	 * 解析命令行参数
+	 *
+	 * @param argv - 参数数组（默认 process.argv）
+	 * @returns 当前实例
+	 */
+	parse(argv?: string[]): this {
+		this._emit('parse:before');
+		this._program.parse(argv);
+		return this;
+	}
+
+	/**
+	 * 解析命令行参数并返回 Command 实例
+	 *
+	 * @param argv - 参数数组（默认 process.argv）
+	 * @returns Commander Command 实例
+	 */
+	parseAsync(argv?: string[]): Promise<Command> {
+		this._emit('parse:before');
+		return this._program.parseAsync(argv);
+	}
+
+	/**
+	 * 获取底层 Commander Command 实例，用于高级定制
+	 *
+	 * @returns Commander Command 实例
+	 */
+	getProgram(): Command {
+		return this._program;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Inquirer Prompts 封装（带错误处理）
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 文本输入提示
+	 *
+	 * @param message - 提示消息
+	 * @param options - 额外配置
+	 * @returns 用户输入的文本，用户取消返回 null
+	 *
+	 * @example
+	 * ```ts
+	 * const name = await cli.promptInput('请输入你的名字:', { defaultValue: 'wbw' });
+	 * if (name === null) cli.warn('已取消');
+	 * ```
+	 */
+	async promptInput(message: string, options?: PromptInputOptions): Promise<string | null> {
+		this._emit('prompt:before', { type: 'input', message });
+		try {
+			const result = await input({
+				message,
+				default: options?.defaultValue,
+				validate: options?.validate,
+				required: options?.required,
+			});
+			this._emit('prompt:after', { type: 'input', result });
+			return result;
+		} catch (e) {
+			this._emit('prompt:cancel', { type: 'input' });
+			this._emit('error', { error: e as Error, context: 'promptInput' });
+			return null;
+		}
+	}
+
+	/**
+	 * 确认提示（是/否）
+	 *
+	 * @param message - 提示消息
+	 * @param defaultValue - 默认值
+	 * @returns 用户选择的结果，用户取消返回 null
+	 *
+	 * @example
+	 * ```ts
+	 * const ok = await cli.promptConfirm('确认继续?');
+	 * if (ok === null) cli.warn('已取消');
+	 * ```
+	 */
+	async promptConfirm(message: string, defaultValue?: boolean): Promise<boolean | null> {
+		this._emit('prompt:before', { type: 'confirm', message });
+		try {
+			const result = await confirm({ message, default: defaultValue });
+			this._emit('prompt:after', { type: 'confirm', result });
+			return result;
+		} catch (e) {
+			this._emit('prompt:cancel', { type: 'confirm' });
+			this._emit('error', { error: e as Error, context: 'promptConfirm' });
+			return null;
+		}
+	}
+
+	/**
+	 * 列表选择提示
+	 *
+	 * @param message - 提示消息
+	 * @param choices - 选项数组
+	 * @returns 用户选择的值，用户取消返回 null
+	 *
+	 * @example
+	 * ```ts
+	 * const lang = await cli.promptSelect('选择语言:', ['TypeScript', 'JavaScript']);
+	 * if (lang === null) return;
+	 * cli.success(`你选择了: ${lang}`);
+	 * ```
+	 */
+	async promptSelect(message: string, choices: (string | ChoiceOption)[]): Promise<string | null> {
+		this._emit('prompt:before', { type: 'select', message });
+		try {
+			const formattedChoices = choices.map(c =>
+				typeof c === 'string' ? { name: c, value: c } : { name: c.name, value: c.value }
+			);
+			const result = await select({
+				message,
+				choices: formattedChoices as never,
+			});
+			this._emit('prompt:after', { type: 'select', result });
+			return result as string;
+		} catch (e) {
+			this._emit('prompt:cancel', { type: 'select' });
+			this._emit('error', { error: e as Error, context: 'promptSelect' });
+			return null;
+		}
+	}
+
+	/**
+	 * 多选提示（复选框）
+	 *
+	 * @param message - 提示消息
+	 * @param choices - 选项数组
+	 * @returns 用户选择的值数组，用户取消返回 null
+	 *
+	 * @example
+	 * ```ts
+	 * const features = await cli.promptCheckbox('选择功能:', ['ESLint', 'Prettier']);
+	 * if (features === null) return;
+	 * cli.success(`已选择: ${features.join(', ')}`);
+	 * ```
+	 */
+	async promptCheckbox(message: string, choices: (string | ChoiceOption)[]): Promise<string[] | null> {
+		this._emit('prompt:before', { type: 'checkbox', message });
+		try {
+			const formattedChoices = choices.map(c =>
+				typeof c === 'string'
+					? { name: c, value: c, checked: false }
+					: { name: c.name, value: c.value, checked: c.checked ?? false }
+			);
+			const result = await checkbox({
+				message,
+				choices: formattedChoices as never,
+			});
+			this._emit('prompt:after', { type: 'checkbox', result });
+			return result as string[];
+		} catch (e) {
+			this._emit('prompt:cancel', { type: 'checkbox' });
+			this._emit('error', { error: e as Error, context: 'promptCheckbox' });
+			return null;
+		}
+	}
+
+	/**
+	 * 密码输入提示（内容隐藏）
+	 *
+	 * @param message - 提示消息
+	 * @param options - 密码选项（mask、minLength、validate）
+	 * @returns 用户输入的密码文本，用户取消返回 null
+	 *
+	 * @example
+	 * ```ts
+	 * const pwd = await cli.promptPassword('请输入密码:', { minLength: 6 });
+	 * if (pwd === null) return;
+	 * cli.success(`密码长度: ${pwd.length}`);
+	 * ```
+	 */
+	async promptPassword(message: string, options?: PromptPasswordOptions): Promise<string | null> {
+		this._emit('prompt:before', { type: 'password', message });
+		try {
+			const { mask, minLength, validate } = options ?? {};
+
+			const combinedValidate = async (value: string): Promise<boolean | string> => {
+				if (minLength && minLength > 0 && value.length < minLength) {
+					return `密码长度不能少于 ${minLength} 个字符`;
+				}
+				if (validate) {
+					return validate(value);
+				}
+				return true;
+			};
+
+			const result = await password({
+				message,
+				mask,
+				validate: combinedValidate,
+			});
+			this._emit('prompt:after', { type: 'password', result });
+			return result;
+		} catch (e) {
+			this._emit('prompt:cancel', { type: 'password' });
+			this._emit('error', { error: e as Error, context: 'promptPassword' });
+			return null;
+		}
+	}
+
+	// ═══════════════════════════════════════════
+	//  Ora Spinner 封装（链式）
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 创建并启动 Spinner
+	 *
+	 * @param text - 显示文本
+	 * @param options - ora 配置选项
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.spinnerStart('加载中...').spinnerSucceed('完成!');
+	 * ```
+	 */
+	spinnerStart(text: string, options?: OraOptions): this {
+		this._emit('spinner:start', { text });
+		this._spinner = ora({ text, ...options }).start();
+		return this;
+	}
+
+	/**
+	 * 停止 Spinner
+	 *
+	 * @returns 当前实例
+	 */
+	spinnerStop(): this {
+		this._spinner?.stop();
+		this._spinner = null;
+		this._emit('spinner:stop');
+		return this;
+	}
+
+	/**
+	 * Spinner 成功状态（✔）
+	 *
+	 * @param text - 成功消息
+	 * @returns 当前实例
+	 */
+	spinnerSucceed(text?: string): this {
+		this._spinner?.succeed(text);
+		this._spinner = null;
+		this._emit('spinner:succeed', { text });
+		return this;
+	}
+
+	/**
+	 * Spinner 失败状态（✖）
+	 *
+	 * @param text - 失败消息
+	 * @returns 当前实例
+	 */
+	spinnerFail(text?: string): this {
+		this._spinner?.fail(text);
+		this._spinner = null;
+		this._emit('spinner:fail', { text });
+		return this;
+	}
+
+	/**
+	 * Spinner 警告状态（⚠）
+	 *
+	 * @param text - 警告消息
+	 * @returns 当前实例
+	 */
+	spinnerWarn(text?: string): this {
+		this._spinner?.warn(text);
+		this._spinner = null;
+		this._emit('spinner:stop');
+		return this;
+	}
+
+	/**
+	 * Spinner 信息状态（ℹ）
+	 *
+	 * @param text - 信息消息
+	 * @returns 当前实例
+	 */
+	spinnerInfo(text?: string): this {
+		this._spinner?.info(text);
+		this._spinner = null;
+		this._emit('spinner:stop');
+		return this;
+	}
+
+	/**
+	 * 持久化 Spinner（停止并保留文本）
+	 *
+	 * @param symbol - 替代符号
+	 * @param text - 保留的文本
+	 * @returns 当前实例
+	 */
+	spinnerPersist(symbol?: string, text?: string): this {
+		this._spinner?.stopAndPersist({ symbol, text });
+		this._spinner = null;
+		this._emit('spinner:stop');
+		return this;
+	}
+
+	/**
+	 * 更新 Spinner 文本
+	 *
+	 * @param text - 新文本
+	 * @returns 当前实例
+	 */
+	spinnerText(text: string): this {
+		if (this._spinner) {
+			this._spinner.text = text;
+		}
+		return this;
+	}
+
+	/**
+	 * 获取当前 Spinner 实例（用于高级操作）
+	 *
+	 * @returns 当前 Spinner 实例，若未创建则返回 null
+	 */
+	getSpinner(): Ora | null {
+		return this._spinner;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Chalk 颜色工具（链式）
+	// ═══════════════════════════════════════════
+
+	/** @private */
+	private _out(text: string): void {
+		this._options.logger.log(text);
+	}
+
+	/** @private */
+	private _logWithLevel(level: LogLevel, text: string): void {
+		const currentLevel = this._options.logger.level ?? 'debug';
+		if (LOG_LEVEL_PRIORITY[level] < LOG_LEVEL_PRIORITY[currentLevel]) return;
+
+		if (level === 'error') {
+			(this._options.logger.error ?? this._options.logger.log)(text);
+		} else if (level === 'warn') {
+			(this._options.logger.warn ?? this._options.logger.log)(text);
+		} else if (level === 'info') {
+			(this._options.logger.info ?? this._options.logger.log)(text);
+		} else {
+			(this._options.logger.debug ?? this._options.logger.log)(text);
+		}
+	}
+
+	/** @private */
+	private _logDebug(text: string): void {
+		this._logWithLevel('debug', text);
+	}
+
+	logRed(text: string): this { this._out(chalk.red(text)); return this; }
+	logGreen(text: string): this { this._out(chalk.green(text)); return this; }
+	logYellow(text: string): this { this._out(chalk.yellow(text)); return this; }
+	logBlue(text: string): this { this._out(chalk.blue(text)); return this; }
+	logCyan(text: string): this { this._out(chalk.cyan(text)); return this; }
+	logMagenta(text: string): this { this._out(chalk.magenta(text)); return this; }
+	logWhite(text: string): this { this._out(chalk.white(text)); return this; }
+	logGray(text: string): this { this._out(chalk.gray(text)); return this; }
+	logBold(text: string): this { this._out(chalk.bold(text)); return this; }
+	logUnderline(text: string): this { this._out(chalk.underline(text)); return this; }
+
+	/**
+	 * 输出成功信息（绿色 + ✔）
+	 *
+	 * @param text - 文本内容
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.success('操作成功!');
+	 * ```
+	 */
+	success(text: string): this {
+		this._out(chalk.green(`✔ ${text}`));
+		return this;
+	}
+
+	/**
+	 * 输出错误信息（红色 + ✖）
+	 *
+	 * @param text - 文本内容
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.error('操作失败!');
+	 * ```
+	 */
+	error(text: string): this {
+		this._out(chalk.red(`✖ ${text}`));
+		return this;
+	}
+
+	/**
+	 * 输出警告信息（黄色 + ⚠）
+	 *
+	 * @param text - 文本内容
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.warn('请注意!');
+	 * ```
+	 */
+	warn(text: string): this {
+		this._out(chalk.yellow(`⚠ ${text}`));
+		return this;
+	}
+
+	/**
+	 * 输出提示信息（蓝色 + ℹ）
+	 *
+	 * @param text - 文本内容
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.info('提示信息');
+	 * ```
+	 */
+	info(text: string): this {
+		this._out(chalk.blue(`ℹ ${text}`));
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Figlet ASCII Art 封装
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 生成并输出 ASCII Art 文本
+	 *
+	 * @param text - 要转换的文本
+	 * @param font - figlet 字体名称（默认 'Standard'）
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.printBanner('Hello');
+	 * cli.printBanner('Big', 'Big');
+	 * ```
+	 */
+	printBanner(text: string, font?: string): this {
+		const art = figlet.textSync(text, { font: font as figlet.Fonts });
+		this._out(chalk.cyan(art));
+		return this;
+	}
+
+	/**
+	 * 生成 ASCII Art 文本（不输出）
+	 *
+	 * @param text - 要转换的文本
+	 * @param font - figlet 字体名称（默认 'Standard'）
+	 * @returns 生成的 ASCII Art 文本
+	 *
+	 * @example
+	 * ```ts
+	 * const art = cli.banner('Hello');
+	 * fs.writeFileSync('banner.txt', art);
+	 * ```
+	 */
+	banner(text: string, font?: string): string {
+		return figlet.textSync(text, { font: font as figlet.Fonts });
+	}
+
+	/**
+	 * 异步生成 ASCII Art 文本
+	 *
+	 * @param text - 要转换的文本
+	 * @param font - figlet 字体名称（默认 'Standard'）
+	 * @returns Promise，解析为 ASCII Art 文本
+	 */
+	bannerAsync(text: string, font?: string): Promise<string> {
+		return figlet.text(text, { font: font as figlet.Fonts });
+	}
+
+	/**
+	 * 获取所有可用的 figlet 字体列表
+	 *
+	 * @returns 字体名称数组
+	 */
+	getFonts(): string[] {
+		return figlet.fontsSync();
+	}
+
+	// ═══════════════════════════════════════════
+	//  光标控制
+	// ═══════════════════════════════════════════
+
+	/** @private */
+	private _hideCursor(): void {
+		cliCursor.hide();
+		this._cursorHidden = true;
+		this._registerExitHandler();
+	}
+
+	/** @private */
+	private _showCursor(): void {
+		if (this._cursorHidden) {
+			cliCursor.show();
+			this._cursorHidden = false;
+		}
+	}
+
+	/** @private */
+	private _registerExitHandler(): void {
+		if (this._exitHandlerRegistered) return;
+		this._exitHandlerRegistered = true;
+
+		const cleanup = (): void => {
+			this._showCursor();
+			if (this._spinner?.isSpinning) {
+				this._spinner.stop();
+			}
+		};
+
+		process.on('exit', cleanup);
+		process.on('SIGINT', () => { cleanup(); process.exit(130); });
+		process.on('SIGTERM', () => { cleanup(); process.exit(143); });
+	}
+
+	/**
+	 * 显示终端光标
+	 *
+	 * @returns 当前实例
+	 */
+	cursorShow(): this {
+		this._showCursor();
+		return this;
+	}
+
+	/**
+	 * 隐藏终端光标
+	 *
+	 * @returns 当前实例
+	 */
+	cursorHide(): this {
+		this._hideCursor();
+		return this;
+	}
+
+	/**
+	 * 切换光标可见性
+	 *
+	 * @param force - true 显示，false 隐藏，undefined 切换
+	 * @returns 当前实例
+	 */
+	cursorToggle(force?: boolean): this {
+		if (force === true) {
+			this._showCursor();
+		} else if (force === false) {
+			this._hideCursor();
+		} else {
+			if (this._cursorHidden) {
+				this._showCursor();
+			} else {
+				this._hideCursor();
+			}
+		}
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  通用日志
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 输出普通日志
+	 *
+	 * @param text - 文本内容
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.print('Hello World');
+	 * ```
+	 */
+	print(text: string): this {
+		this._out(text);
+		return this;
+	}
+
+	/**
+	 * 输出带前缀的日志
+	 *
+	 * @param prefix - 前缀文本
+	 * @param text - 日志内容
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.logWithPrefix('[INFO]', '任务完成');
+	 * ```
+	 */
+	logWithPrefix(prefix: string, text: string): this {
+		this._out(`${chalk.gray(prefix)} ${text}`);
+		return this;
+	}
+
+	/**
+	 * 输出空行
+	 *
+	 * @returns 当前实例
+	 */
+	newline(): this {
+		this._out('');
+		return this;
+	}
+
+	/**
+	 * 输出分隔线
+	 *
+	 * @param char - 分隔线字符
+	 * @param length - 分隔线长度
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.divider('=', 50);
+	 * ```
+	 */
+	divider(char = '─', length = 40): this {
+		this._out(chalk.gray(char.repeat(length)));
+		return this;
+	}
+}

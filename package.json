@@ -1,0 +1,57 @@
+{
+	"name": "wbw-cli-tools-lib",
+	"version": "1.0.0",
+	"description": "CLI工具库 - 封装inquirer/commander/ora/chalk/figlet等",
+	"type": "module",
+	"main": "./dist/index.js",
+	"module": "./dist/esm/index.js",
+	"types": "./dist/esm/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/esm/index.d.ts",
+				"default": "./dist/esm/index.js"
+			},
+			"require": {
+				"types": "./dist/esm/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"author": {
+		"name": "wbw121124"
+	},
+	"license": "GPLv3.0-only",
+	"private": false,
+	"sideEffects": false,
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"build": "npm run typecheck && rolldown -c",
+		"clean": "rimraf dist",
+		"doc": "rimraf docs && typedoc",
+		"dev": "npm run doc && npm run build"
+	},
+	"dependencies": {
+		"@inquirer/prompts": "^7.0.0",
+		"commander": "^13.0.0",
+		"ora": "^8.0.0",
+		"cli-cursor": "^4.0.0",
+		"chalk": "^5.4.1",
+		"figlet": "^1.8.0"
+	},
+	"devDependencies": {
+		"@types/figlet": "^1.7.0",
+		"@types/node": "^22.0.0",
+		"rolldown": "^1.2.0",
+		"rolldown-plugin-dts": "^0.27.14",
+		"typedoc": "^0.28.20",
+		"typescript": "^5.7.0",
+		"rimraf": "^6.0.0"
+	}
+}
