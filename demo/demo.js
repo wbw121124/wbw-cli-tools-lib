@@ -1,4 +1,4 @@
-import { CliTools } from '../dist/esm/index.js';
+import { CliTools, EventEmitter } from '../dist/esm/index.js';
 
 const cli = CliTools.create({
   commandName: 'demo-cli',
@@ -127,6 +127,95 @@ cli
 
     // 清理
     cli.closeReadline();
+
+    // ═══════════════════════════════════════════
+    //  EventEmitter 演示
+    // ═══════════════════════════════════════════
+
+    cli.newline().divider('=', 50).newline();
+    cli.printBanner('EventEmitter Demo');
+    cli.info('独立 EventEmitter + CliTools 事件管理器');
+    cli.newline();
+
+    // 1. 基础使用
+    cli.logBold('[1] 基础事件监听');
+    const emitter = new EventEmitter();
+    emitter.on('greet', (name) => cli.success(`你好, ${name}!`));
+    emitter.emit('greet', 'World');
+    cli.newline();
+
+    // 2. once 监听
+    cli.logBold('[2] once 只触发一次');
+    const onceEmitter = new EventEmitter();
+    onceEmitter.once('click', () => cli.info('按钮被点击'));
+    onceEmitter.emit('click', undefined);
+    onceEmitter.emit('click', undefined);
+    cli.logGray('  (第二次 emit 不会触发)');
+    cli.newline();
+
+    // 3. 通配符监听
+    cli.logBold('[3] 通配符监听');
+    const wcEmitter = new EventEmitter();
+    wcEmitter.addWildcardListener((event, data) => {
+      cli.logGray(`  [wildcard] ${event}: ${data}`);
+    });
+    wcEmitter.emit('build', 'started');
+    wcEmitter.emit('test', 'passed');
+    wcEmitter.emit('deploy', 'done');
+    cli.newline();
+
+    // 4. 优先级
+    cli.logBold('[4] 优先级');
+    const priEmitter = new EventEmitter();
+    priEmitter.on('task', () => cli.logGray('  低优先级'), { priority: 1 });
+    priEmitter.on('task', () => cli.logGray('  高优先级'), { priority: 10 });
+    priEmitter.on('task', () => cli.logGray('  默认优先级'));
+    priEmitter.emit('task', undefined);
+    cli.newline();
+
+    // 5. 事件历史
+    cli.logBold('[5] 事件历史');
+    const histEmitter = new EventEmitter();
+    histEmitter.emit('data', 'first');
+    histEmitter.emit('data', 'second');
+    histEmitter.emit('data', 'third');
+    const history = histEmitter.getHistory();
+    cli.info(`  历史记录: ${history.length} 条`);
+    history.forEach(h => cli.logGray(`  [${h.event}] ${h.data} @ ${new Date(h.timestamp).toLocaleTimeString()}`));
+    cli.newline();
+
+    // 6. 中间件
+    cli.logBold('[6] 事件中间件');
+    const mwEmitter = new EventEmitter();
+    mwEmitter.use((event, data, next) => {
+      cli.logGray(`  [middleware] before: ${event}`);
+      next();
+      cli.logGray(`  [middleware] after: ${event}`);
+    });
+    mwEmitter.emit('action', 'test');
+    cli.newline();
+
+    // 7. 条件监听
+    cli.logBold('[7] 条件监听');
+    const condEmitter = new EventEmitter();
+    condEmitter.onWhen('data', (msg) => msg.includes('error'), (msg) => {
+      cli.error(`  捕获错误: ${msg}`);
+    });
+    condEmitter.emit('data', 'everything is fine');
+    cli.logGray('  (无错误，不触发)');
+    condEmitter.emit('data', 'something error occurred');
+    cli.newline();
+
+    // 8. CliTools 事件管理器新功能
+    cli.logBold('[8] CliTools 事件管理器');
+    const testCli = CliTools.create({ commandName: 'test', color: false, cursor: false });
+    testCli.once('init', () => cli.info('  init 只触发一次'));
+    testCli.emit('init', undefined);
+    testCli.emit('init', undefined);
+    cli.logGray('  (第二次不触发)');
+    cli.logWithPrefix('[COUNT]', `spinner:start 监听器: ${testCli.listenerCount('spinner:start')}`);
+    cli.logWithPrefix('[NAMES]', `已注册事件: ${testCli.eventNames().join(', ')}`);
+    cli.newline();
 
     cli.newline().divider('=', 50).newline();
     cli.printBanner('Done!');

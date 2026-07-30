@@ -1,4 +1,5 @@
 export { CliTools } from './cli-tools.js';
+export { EventEmitter } from './event-emitter.js';
 export type {
 	CliToolsOptions,
 	LogLevel,
@@ -14,4 +15,8 @@ export type {
 	OptionValue,
 	ReadlineCompleter,
 	ReadlineInterfaceOptions,
+	EventHandler,
+	EventEmitterOptions,
+	EventHistoryEntry,
+	EventMiddleware,
 } from './types.js';

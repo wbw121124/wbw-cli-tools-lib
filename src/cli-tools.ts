@@ -10,6 +10,7 @@ import checkbox from '@inquirer/checkbox';
 import password from '@inquirer/password';
 import * as readlineModule from 'readline-promise';
 import * as nodeReadline from 'node:readline';
+import { EventEmitter } from './event-emitter.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type {
@@ -27,6 +28,8 @@ import type {
 	OptionValue,
 	ReadlineInterfaceOptions,
 	ReadlineCompleter,
+	EventHistoryEntry,
+	EventMiddleware,
 } from './types.js';
 import type { ReadlinePromiseInterface } from 'readline-promise';
 import type { ReadlinePromiseModule } from 'readline-promise';
@@ -74,7 +77,7 @@ export class CliTools {
 	private _cursorHidden = false;
 	private _exitHandlerRegistered = false;
 	private _plugins: CliToolsPlugin[] = [];
-	private _eventHandlers = new Map<string, Set<CliToolsEventHandler>>();
+	private _emitter: EventEmitter<CliToolsEventMap>;
 	private _config: Record<string, unknown> = {};
 	private _readlineInterface: ReadlinePromiseInterface | null = null;
 
@@ -90,6 +93,7 @@ export class CliTools {
 		this._program = new Command();
 		this._program.name(this._options.commandName);
 		this._program.description(this._options.commandDescription);
+		this._emitter = new EventEmitter<CliToolsEventMap>();
 
 		if (!this._options.color) {
 			chalk.level = 0;
@@ -149,10 +153,7 @@ export class CliTools {
 	 * ```
 	 */
 	on<K extends keyof CliToolsEventMap>(event: K, handler: CliToolsEventHandler<CliToolsEventMap[K]>): this {
-		if (!this._eventHandlers.has(event)) {
-			this._eventHandlers.set(event, new Set());
-		}
-		this._eventHandlers.get(event)!.add(handler as CliToolsEventHandler);
+		this._emitter.on(event, handler);
 		return this;
 	}
 
@@ -164,7 +165,7 @@ export class CliTools {
 	 * @returns 当前实例
 	 */
 	off<K extends keyof CliToolsEventMap>(event: K, handler: CliToolsEventHandler<CliToolsEventMap[K]>): this {
-		this._eventHandlers.get(event)?.delete(handler as CliToolsEventHandler);
+		this._emitter.off(event, handler);
 		return this;
 	}
 
@@ -174,15 +175,197 @@ export class CliTools {
 	 * @private
 	 */
 	private _emit<K extends keyof CliToolsEventMap>(event: K, data?: CliToolsEventMap[K]): void {
-		const handlers = this._eventHandlers.get(event);
-		if (!handlers) return;
-		for (const handler of handlers) {
-			try {
-				handler(data as never);
-			} catch (e) {
-				this._options.logger.error?.(`[Event:${event}] Handler error:`, e);
-			}
-		}
+		this._emitter.emit(event, data as CliToolsEventMap[K]);
+	}
+
+	// ═══════════════════════════════════════════
+	//  事件管理器高级 API（公开）
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 监听事件（仅触发一次）
+	 *
+	 * @param event - 事件名称
+	 * @param handler - 事件处理器
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.once('init', () => console.log('只执行一次'));
+	 * ```
+	 */
+	once<K extends keyof CliToolsEventMap>(event: K, handler: CliToolsEventHandler<CliToolsEventMap[K]>): this {
+		this._emitter.once(event, handler);
+		return this;
+	}
+
+	/**
+	 * 公开触发事件
+	 *
+	 * @param event - 事件名称
+	 * @param data - 事件数据
+	 * @returns 是否有监听器被调用
+	 *
+	 * @example
+	 * ```ts
+	 * cli.emit('custom:event', { value: 42 });
+	 * ```
+	 */
+	emit<K extends keyof CliToolsEventMap>(event: K, data?: CliToolsEventMap[K]): boolean {
+		return this._emitter.emit(event, data as CliToolsEventMap[K]);
+	}
+
+	/**
+	 * 获取指定事件的监听器数量
+	 *
+	 * @param event - 事件名称
+	 * @returns 监听器数量
+	 */
+	listenerCount<K extends keyof CliToolsEventMap>(event: K): number {
+		return this._emitter.listenerCount(event);
+	}
+
+	/**
+	 * 获取指定事件的所有监听器
+	 *
+	 * @param event - 事件名称
+	 * @returns 处理器数组
+	 */
+	listeners<K extends keyof CliToolsEventMap>(event: K): CliToolsEventHandler<CliToolsEventMap[K]>[] {
+		return this._emitter.listeners(event) as CliToolsEventHandler<CliToolsEventMap[K]>[];
+	}
+
+	/**
+	 * 获取所有已注册的事件名称
+	 *
+	 * @returns 事件名称数组
+	 */
+	eventNames(): (keyof CliToolsEventMap)[] {
+		return this._emitter.eventNames();
+	}
+
+	/**
+	 * 检查事件是否有监听器
+	 *
+	 * @param event - 事件名称
+	 * @returns 是否有监听器
+	 */
+	hasListeners<K extends keyof CliToolsEventMap>(event: K): boolean {
+		return this._emitter.hasListeners(event);
+	}
+
+	/**
+	 * 将监听器添加到队列头部
+	 *
+	 * @param event - 事件名称
+	 * @param handler - 事件处理器
+	 * @returns 当前实例
+	 */
+	prependListener<K extends keyof CliToolsEventMap>(event: K, handler: CliToolsEventHandler<CliToolsEventMap[K]>): this {
+		this._emitter.prependListener(event, handler);
+		return this;
+	}
+
+	/**
+	 * 添加通配符监听器（监听所有事件）
+	 *
+	 * @param handler - 接收 (event, data) 的处理器
+	 * @returns 当前实例
+	 */
+	addWildcardListener(handler: (event: string, data: unknown) => void): this {
+		this._emitter.addWildcardListener(handler);
+		return this;
+	}
+
+	/**
+	 * 移除通配符监听器
+	 *
+	 * @param handler - 要移除的处理器
+	 * @returns 当前实例
+	 */
+	offWildcardListener(handler: (event: string, data: unknown) => void): this {
+		this._emitter.offWildcardListener(handler);
+		return this;
+	}
+
+	/**
+	 * 注册事件中间件（洋葱模型拦截事件）
+	 *
+	 * @param middleware - 中间件函数
+	 * @returns 当前实例
+	 */
+	addEventMiddleware(middleware: EventMiddleware<CliToolsEventMap>): this {
+		this._emitter.use(middleware);
+		return this;
+	}
+
+	/**
+	 * 条件监听：仅当 condition 返回 true 时执行 handler
+	 *
+	 * @param event - 事件名称
+	 * @param condition - 条件函数
+	 * @param handler - 事件处理器
+	 * @returns 当前实例
+	 */
+	onEventWhen<K extends keyof CliToolsEventMap>(
+		event: K,
+		condition: (data: CliToolsEventMap[K]) => boolean,
+		handler: CliToolsEventHandler<CliToolsEventMap[K]>,
+	): this {
+		this._emitter.onWhen(event, condition, handler);
+		return this;
+	}
+
+	/**
+	 * 获取事件历史记录
+	 *
+	 * @param event - 过滤事件名称（可选）
+	 * @returns 历史记录数组
+	 */
+	getEventHistory<K extends keyof CliToolsEventMap>(event?: K): EventHistoryEntry[] {
+		return this._emitter.getHistory(event);
+	}
+
+	/**
+	 * 清空事件历史记录
+	 *
+	 * @param event - 清空指定事件的历史（可选）
+	 * @returns 当前实例
+	 */
+	clearEventHistory<K extends keyof CliToolsEventMap>(event?: K): this {
+		this._emitter.clearHistory(event);
+		return this;
+	}
+
+	/**
+	 * 重放事件历史记录
+	 *
+	 * @param options - 重放选项
+	 * @returns 当前实例
+	 */
+	replayEventHistory(options?: { event?: keyof CliToolsEventMap; count?: number }): this {
+		this._emitter.replayHistory(options);
+		return this;
+	}
+
+	/**
+	 * 获取底层 EventEmitter 实例（高级用法）
+	 *
+	 * @returns EventEmitter 实例
+	 */
+	getEventEmitter(): EventEmitter<CliToolsEventMap> {
+		return this._emitter;
+	}
+
+	/**
+	 * 移除指定事件的所有监听器，或移除所有事件的所有监听器
+	 *
+	 * @param event - 事件名称（可选）
+	 * @returns 当前实例
+	 */
+	removeAllEventListeners<K extends keyof CliToolsEventMap>(event?: K): this {
+		this._emitter.removeAllListeners(event);
+		return this;
 	}
 
 	// ═══════════════════════════════════════════

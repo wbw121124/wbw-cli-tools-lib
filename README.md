@@ -1,6 +1,6 @@
 # wbw-cli-tools-lib
 
-CLI 工具库 - 封装 commander、@inquirer/prompts、ora、chalk、figlet、cli-cursor、readline-promise，提供链式 API、工厂模式、事件系统与插件机制。
+CLI 工具库 - 封装 commander、@inquirer/prompts、ora、chalk、figlet、cli-cursor、readline-promise、EventEmitter，提供链式 API、工厂模式、事件系统与插件机制。
 
 ## 安装
 
@@ -212,6 +212,81 @@ const history = cli.getHistory();  // 获取历史记录
 cli.clearHistory();                // 清空历史记录
 ```
 
+### EventEmitter（独立事件管理器）
+
+独立的类型安全事件发射器，支持完整版功能：on/once/off/emit、通配符、优先级、事件历史、中间件、条件监听、命名空间。
+
+```ts
+import { EventEmitter } from 'wbw-cli-tools-lib';
+
+// 基础使用
+const emitter = new EventEmitter<{ error: Error; data: string }>();
+emitter.on('error', (err) => console.error(err));
+emitter.emit('error', new Error('fail'));
+
+// once 监听
+emitter.once('data', (msg) => console.log('只触发一次'));
+emitter.emit('data', 'hello');  // 触发
+emitter.emit('data', 'world');  // 不触发
+
+// 通配符（监听所有事件）
+emitter.addWildcardListener((event, data) => {
+  console.log(`[${event}]`, data);
+});
+
+// 优先级（数值越大越先执行）
+emitter.on('task', () => console.log('高优先级'), { priority: 10 });
+emitter.on('task', () => console.log('低优先级'), { priority: 1 });
+
+// 事件历史
+emitter.emit('data', 'first');
+emitter.getHistory();           // [{ event: 'data', data: 'first', timestamp: ... }]
+emitter.clearHistory();
+emitter.replayHistory({ count: 5 }); // 重放最近 5 条
+
+// 中间件（洋葱模型）
+emitter.use((event, data, next) => {
+  console.log(`before: ${event}`);
+  next();
+  console.log(`after: ${event}`);
+});
+
+// 条件监听
+emitter.onWhen('data', (msg) => msg.includes('error'), (msg) => {
+  console.log('捕获错误:', msg);
+});
+
+// 命名空间
+const build = emitter.namespace('build');
+build.on('start', handler);     // 实际监听 'build:start'
+build.emit('start', data);      // 实际触发 'build:start'
+
+// 销毁
+emitter.dispose();
+```
+
+### CliTools 事件管理器增强
+
+CliTools 内部已集成 EventEmitter，新增以下公开 API：
+
+```ts
+cli.once('init', () => console.log('只触发一次'));
+cli.emit('custom:event', { value: 42 });
+cli.listenerCount('spinner:start');
+cli.listeners('error');
+cli.eventNames();
+cli.hasListeners('init');
+cli.prependListener('init', handler);
+cli.addWildcardListener((event, data) => {});
+cli.addEventMiddleware((event, data, next) => { next(); });
+cli.onEventWhen('data', (msg) => msg.includes('err'), handler);
+cli.getEventHistory();
+cli.clearEventHistory();
+cli.replayEventHistory({ count: 5 });
+cli.getEventEmitter();          // 获取底层 EventEmitter 实例
+cli.removeAllEventListeners();  // 清空所有监听器
+```
+
 ## API 列表
 
 ### 工厂方法
@@ -260,6 +335,52 @@ cli.clearHistory();                // 清空历史记录
 | `clearScreen()` | `this` | 清屏 |
 | `getHistory()` | `string[]` | 获取历史记录 |
 | `clearHistory()` | `this` | 清空历史记录 |
+
+### EventEmitter（独立）
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `on(event, handler, opts?)` | `this` | 监听事件 |
+| `once(event, handler, opts?)` | `this` | 监听一次 |
+| `off(event, handler)` | `this` | 移除监听 |
+| `emit(event, data)` | `boolean` | 触发事件 |
+| `removeAllListeners(event?)` | `this` | 移除所有监听器 |
+| `listenerCount(event)` | `number` | 监听器数量 |
+| `listeners(event)` | `EventHandler[]` | 获取监听器列表 |
+| `eventNames()` | `(keyof T)[]` | 已注册事件名 |
+| `hasListeners(event)` | `boolean` | 是否有监听器 |
+| `prependListener(event, handler)` | `this` | 添加到队列头部 |
+| `addWildcardListener(handler)` | `this` | 通配符监听 |
+| `addOnceWildcardListener(handler)` | `this` | 一次性通配符 |
+| `offWildcardListener(handler)` | `this` | 移除通配符 |
+| `use(middleware)` | `this` | 注册中间件 |
+| `onWhen(event, condition, handler)` | `this` | 条件监听 |
+| `namespace(ns)` | `EventEmitter` | 命名空间子发射器 |
+| `getHistory(event?)` | `EventHistoryEntry[]` | 获取历史记录 |
+| `clearHistory(event?)` | `this` | 清空历史记录 |
+| `replayHistory(opts?)` | `this` | 重放历史记录 |
+| `dispose()` | `void` | 销毁发射器 |
+
+### CliTools 事件管理器增强
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `once(event, handler)` | `this` | 监听一次 |
+| `emit(event, data?)` | `boolean` | 公开触发事件 |
+| `listenerCount(event)` | `number` | 监听器数量 |
+| `listeners(event)` | `EventHandler[]` | 获取监听器 |
+| `eventNames()` | `(keyof T)[]` | 已注册事件名 |
+| `hasListeners(event)` | `boolean` | 是否有监听器 |
+| `prependListener(event, handler)` | `this` | 添加到队列头部 |
+| `addWildcardListener(handler)` | `this` | 通配符监听 |
+| `offWildcardListener(handler)` | `this` | 移除通配符 |
+| `addEventMiddleware(middleware)` | `this` | 事件中间件 |
+| `onEventWhen(event, cond, handler)` | `this` | 条件监听 |
+| `getEventHistory(event?)` | `EventHistoryEntry[]` | 获取历史 |
+| `clearEventHistory(event?)` | `this` | 清空历史 |
+| `replayEventHistory(opts?)` | `this` | 重放历史 |
+| `getEventEmitter()` | `EventEmitter` | 获取底层实例 |
+| `removeAllEventListeners(event?)` | `this` | 清空所有监听器 |
 
 ### Spinner
 

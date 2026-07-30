@@ -195,3 +195,41 @@ export interface ReadlineInterfaceOptions {
 	/** 是否保留历史记录（默认 true） */
 	history?: boolean;
 }
+
+/**
+ * 事件处理器函数类型
+ * @public
+ */
+export type EventHandler<T = void> = (data: T) => void | Promise<void>;
+
+/**
+ * EventEmitter 配置选项
+ * @public
+ */
+export interface EventEmitterOptions {
+	/** 历史记录最大条数（默认 100） */
+	maxHistory?: number;
+}
+
+/**
+ * 事件历史记录条目
+ * @public
+ */
+export interface EventHistoryEntry<T = unknown> {
+	/** 事件名称 */
+	event: string;
+	/** 事件数据 */
+	data: T;
+	/** 时间戳 */
+	timestamp: number;
+}
+
+/**
+ * 事件中间件函数类型
+ * @public
+ */
+export type EventMiddleware<T = Record<string, unknown>> = (
+	event: keyof T,
+	data: T[keyof T],
+	next: () => void,
+) => void;
