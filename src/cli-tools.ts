@@ -8,7 +8,7 @@ import confirm from '@inquirer/confirm';
 import select from '@inquirer/select';
 import checkbox from '@inquirer/checkbox';
 import password from '@inquirer/password';
-import readline from 'readline-promise';
+import * as readlineModule from 'readline-promise';
 import * as nodeReadline from 'node:readline';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -28,7 +28,12 @@ import type {
 	ReadlineInterfaceOptions,
 	ReadlineCompleter,
 } from './types.js';
-import type { ReadlineInterface } from 'readline-promise';
+import type { ReadlinePromiseInterface } from 'readline-promise';
+import type { ReadlinePromiseModule } from 'readline-promise';
+
+const _rlpNs = readlineModule as unknown as { default?: { default?: ReadlinePromiseModule } & ReadlinePromiseModule } & ReadlinePromiseModule;
+const _dl = _rlpNs.default;
+const readline: ReadlinePromiseModule = _dl?.default?.createInterface ? _dl.default : _dl?.createInterface ? _dl as ReadlinePromiseModule : _rlpNs;
 
 const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
 	debug: 0,
@@ -71,7 +76,7 @@ export class CliTools {
 	private _plugins: CliToolsPlugin[] = [];
 	private _eventHandlers = new Map<string, Set<CliToolsEventHandler>>();
 	private _config: Record<string, unknown> = {};
-	private _readlineInterface: ReadlineInterface | null = null;
+	private _readlineInterface: ReadlinePromiseInterface | null = null;
 
 	private constructor(options: CliToolsOptions = {}) {
 		this._options = {
@@ -1061,7 +1066,7 @@ export class CliTools {
 	 * cli.closeReadline();
 	 * ```
 	 */
-	getReadlineInterface(options?: ReadlineInterfaceOptions): ReadlineInterface {
+	getReadlineInterface(options?: ReadlineInterfaceOptions): ReadlinePromiseInterface {
 		if (!this._readlineInterface) {
 			const completer = options?.completer;
 			const terminal = options?.terminal ?? true;
