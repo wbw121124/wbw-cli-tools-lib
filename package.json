@@ -1,6 +1,6 @@
 {
 	"name": "wbw-cli-tools-lib",
-	"version": "1.1.0",
+	"version": "1.1.1",
 	"description": "CLI工具库 - 封装inquirer/commander/ora/chalk/figlet等",
 	"type": "module",
 	"main": "./dist/index.js",
