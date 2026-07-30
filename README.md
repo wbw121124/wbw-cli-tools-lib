@@ -1,6 +1,6 @@
 # wbw-cli-tools-lib
 
-CLI 工具库 - 封装 commander、@inquirer/prompts、ora、chalk、figlet、cli-cursor，提供链式 API、工厂模式、事件系统与插件机制。
+CLI 工具库 - 封装 commander、@inquirer/prompts、ora、chalk、figlet、cli-cursor、readline-promise，提供链式 API、工厂模式、事件系统与插件机制。
 
 ## 安装
 
@@ -184,6 +184,34 @@ await cli.promptCheckbox('选择功能:', [
 ]);
 ```
 
+### Readline（基于 readline-promise）
+
+集成 `readline-promise` 模块，提供 Promise 化的 readline 接口、Tab 补全、光标控制和历史记录功能。
+
+```ts
+// 简单输入
+const name = await cli.readLine('请输入你的名字: ');
+cli.success(`你好, ${name}!`);
+
+// Tab 补全（PowerShell 风格）
+const commands = ['install', 'build', 'test', 'lint', 'publish'];
+const completer = cli.createCompleter(commands);
+const rl = cli.getReadlineInterface({ completer });
+const cmd = await rl.questionAsync('命令> '); // 输入时按 Tab 补全
+cli.closeReadline();
+
+// 光标控制
+cli.cursorTo(0, 0);       // 移动光标到绝对位置
+cli.clearLine();           // 清除当前行
+cli.moveCursor(0, -1);    // 光标上移一行
+cli.clearScreenDown();     // 清除光标以下内容
+cli.clearScreen();         // 清屏
+
+// 历史记录
+const history = cli.getHistory();  // 获取历史记录
+cli.clearHistory();                // 清空历史记录
+```
+
 ## API 列表
 
 ### 工厂方法
@@ -216,6 +244,22 @@ await cli.promptCheckbox('选择功能:', [
 | `promptSelect(msg, choices)` | `string \| null` | 列表选择 |
 | `promptCheckbox(msg, choices)` | `string[] \| null` | 多选 |
 | `promptPassword(msg, opts?)` | `string \| null` | 密码输入 |
+
+### Readline
+
+| 方法 | 返回值 | 说明 |
+|------|--------|------|
+| `getReadlineInterface(opts?)` | `ReadlineInterface` | 获取 readline 接口（懒加载） |
+| `readLine(prompt?)` | `Promise<string>` | 读取一行输入 |
+| `createCompleter(options)` | `ReadlineCompleter` | 创建 Tab 补全器 |
+| `closeReadline()` | `this` | 关闭 readline 接口 |
+| `cursorTo(x, y?)` | `this` | 光标移到绝对位置 |
+| `clearLine(dir?)` | `this` | 清除当前行 |
+| `moveCursor(dx, dy)` | `this` | 光标相对移动 |
+| `clearScreenDown()` | `this` | 清除光标以下内容 |
+| `clearScreen()` | `this` | 清屏 |
+| `getHistory()` | `string[]` | 获取历史记录 |
+| `clearHistory()` | `this` | 清空历史记录 |
 
 ### Spinner
 

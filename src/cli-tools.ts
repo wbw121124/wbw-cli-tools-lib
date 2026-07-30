@@ -8,6 +8,8 @@ import confirm from '@inquirer/confirm';
 import select from '@inquirer/select';
 import checkbox from '@inquirer/checkbox';
 import password from '@inquirer/password';
+import readline from 'readline-promise';
+import * as nodeReadline from 'node:readline';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type {
@@ -23,7 +25,10 @@ import type {
 	LoadConfigOptions,
 	ResolvedConfig,
 	OptionValue,
+	ReadlineInterfaceOptions,
+	ReadlineCompleter,
 } from './types.js';
+import type { ReadlineInterface } from 'readline-promise';
 
 const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
 	debug: 0,
@@ -66,6 +71,7 @@ export class CliTools {
 	private _plugins: CliToolsPlugin[] = [];
 	private _eventHandlers = new Map<string, Set<CliToolsEventHandler>>();
 	private _config: Record<string, unknown> = {};
+	private _readlineInterface: ReadlineInterface | null = null;
 
 	private constructor(options: CliToolsOptions = {}) {
 		this._options = {
@@ -922,6 +928,10 @@ export class CliTools {
 			if (this._spinner?.isSpinning) {
 				this._spinner.stop();
 			}
+			if (this._readlineInterface) {
+				this._readlineInterface.close();
+				this._readlineInterface = null;
+			}
 		};
 
 		process.on('exit', cleanup);
@@ -1031,6 +1041,236 @@ export class CliTools {
 	 */
 	divider(char = '─', length = 40): this {
 		this._out(chalk.gray(char.repeat(length)));
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Readline 接口（基于 readline-promise）
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 获取 readline 接口实例（懒加载）
+	 *
+	 * @param options - readline 配置选项
+	 * @returns readline-promise 接口实例
+	 *
+	 * @example
+	 * ```ts
+	 * const rl = cli.getReadlineInterface();
+	 * const answer = await rl.questionAsync('请输入: ');
+	 * cli.closeReadline();
+	 * ```
+	 */
+	getReadlineInterface(options?: ReadlineInterfaceOptions): ReadlineInterface {
+		if (!this._readlineInterface) {
+			const completer = options?.completer;
+			const terminal = options?.terminal ?? true;
+
+			this._readlineInterface = readline.createInterface({
+				input: process.stdin,
+				output: process.stdout,
+				completer: completer as nodeReadline.Completer | nodeReadline.AsyncCompleter | undefined,
+				terminal,
+			});
+
+			if (options?.history !== false) {
+				(this._readlineInterface as unknown as { history: string[] }).history = [];
+			}
+
+			this._registerExitHandler();
+			this._logDebug('Readline interface created');
+		}
+		return this._readlineInterface;
+	}
+
+	/**
+	 * 读取一行输入（基于 readline-promise）
+	 *
+	 * @param prompt - 提示文本
+	 * @returns 用户输入的文本
+	 *
+	 * @example
+	 * ```ts
+	 * const name = await cli.readLine('请输入你的名字: ');
+	 * cli.success(`你好, ${name}!`);
+	 * ```
+	 */
+	async readLine(prompt?: string): Promise<string> {
+		this._emit('prompt:before', { type: 'readline', message: prompt ?? '' });
+		const rl = this.getReadlineInterface({ prompt });
+		try {
+			const result = await rl.questionAsync(prompt ?? '');
+			this._emit('prompt:after', { type: 'readline', result });
+			return result;
+		} catch (e) {
+			this._emit('prompt:cancel', { type: 'readline' });
+			this._emit('error', { error: e as Error, context: 'readLine' });
+			return '';
+		}
+	}
+
+	/**
+	 * 创建 Tab 补全器（PowerShell 风格）
+	 *
+	 * @param options - 补全选项：字符串数组或自定义补全函数
+	 * @returns readline 补全器函数
+	 *
+	 * @example
+	 * ```ts
+	 * // 字符串数组补全
+	 * const completer = cli.createCompleter(['install', 'build', 'test']);
+	 * const rl = cli.getReadlineInterface({ completer });
+	 *
+	 * // 自定义函数补全
+	 * const customCompleter = cli.createCompleter((line) => {
+	 *   const hits = ['install', 'build', 'test'].filter(c => c.startsWith(line));
+	 *   return [hits.length ? hits : ['install', 'build', 'test'], line];
+	 * });
+	 * ```
+	 */
+	createCompleter(options: string[] | ((line: string) => [string[], string] | Promise<[string[], string]>)): ReadlineCompleter {
+		if (Array.isArray(options)) {
+			const completions = options;
+			return (line: string): [string[], string] => {
+				const hits = completions.filter(c => c.startsWith(line));
+				return [hits.length ? hits : completions, line];
+			};
+		}
+		return options;
+	}
+
+	/**
+	 * 关闭 readline 接口
+	 *
+	 * @returns 当前实例
+	 */
+	closeReadline(): this {
+		if (this._readlineInterface) {
+			this._readlineInterface.close();
+			this._readlineInterface = null;
+			this._logDebug('Readline interface closed');
+		}
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Readline 光标控制（node:readline 静态方法）
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 光标移动到绝对位置
+	 *
+	 * @param x - 列位置
+	 * @param y - 行位置（可选）
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.cursorTo(0, 0); // 移动到左上角
+	 * ```
+	 */
+	cursorTo(x: number, y?: number): this {
+		readline.cursorTo(process.stdout, x, y);
+		return this;
+	}
+
+	/**
+	 * 清除当前行
+	 *
+	 * @param dir - 清除方向：-1=左, 0=全部, 1=右（默认 0）
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.clearLine();    // 清除整行
+	 * cli.clearLine(-1);  // 清除光标左侧
+	 * cli.clearLine(1);   // 清除光标右侧
+	 * ```
+	 */
+	clearLine(dir: -1 | 0 | 1 = 0): this {
+		readline.clearLine(process.stdout, dir);
+		return this;
+	}
+
+	/**
+	 * 光标相对移动
+	 *
+	 * @param dx - 水平移动量（正数向右，负数向左）
+	 * @param dy - 垂直移动量（正数向下，负数向上）
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.moveCursor(0, -1); // 上移一行
+	 * cli.moveCursor(0, 1);  // 下移一行
+	 * ```
+	 */
+	moveCursor(dx: number, dy: number): this {
+		readline.moveCursor(process.stdout, dx, dy);
+		return this;
+	}
+
+	/**
+	 * 清除光标以下屏幕内容
+	 *
+	 * @returns 当前实例
+	 */
+	clearScreenDown(): this {
+		readline.clearScreenDown(process.stdout);
+		return this;
+	}
+
+	/**
+	 * 清屏并将光标移至左上角
+	 *
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.clearScreen();
+	 * cli.printBanner('Hello');
+	 * ```
+	 */
+	clearScreen(): this {
+		readline.cursorTo(process.stdout, 0, 0);
+		readline.clearScreenDown(process.stdout);
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Readline 历史记录
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 获取 readline 历史记录
+	 *
+	 * @returns 历史记录数组
+	 *
+	 * @example
+	 * ```ts
+	 * cli.readLine('输入命令: ');
+	 * const history = cli.getHistory();
+	 * console.log('历史记录:', history);
+	 * ```
+	 */
+	getHistory(): string[] {
+		const rl = this._readlineInterface;
+		if (!rl) return [];
+		const hist = (rl as unknown as { history: string[] }).history;
+		return Array.isArray(hist) ? [...hist] : [];
+	}
+
+	/**
+	 * 清空 readline 历史记录
+	 *
+	 * @returns 当前实例
+	 */
+	clearHistory(): this {
+		const rl = this._readlineInterface;
+		if (rl) {
+			const hist = (rl as unknown as { history: string[] }).history;
+			if (Array.isArray(hist)) hist.length = 0;
+		}
 		return this;
 	}
 }

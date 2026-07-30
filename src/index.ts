@@ -12,4 +12,6 @@ export type {
 	LoadConfigOptions,
 	ResolvedConfig,
 	OptionValue,
+	ReadlineCompleter,
+	ReadlineInterfaceOptions,
 } from './types.js';

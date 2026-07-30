@@ -174,3 +174,24 @@ export interface ResolvedConfig {
  * @public
  */
 export type OptionValue = string | boolean | number;
+
+/**
+ * Readline 补全器函数类型
+ * @public
+ */
+export type ReadlineCompleter = (line: string) => [string[], string] | Promise<[string[], string]>;
+
+/**
+ * readline 接口选项
+ * @public
+ */
+export interface ReadlineInterfaceOptions {
+	/** 是否启用终端模式（默认 true） */
+	terminal?: boolean;
+	/** Tab 补全器 */
+	completer?: ReadlineCompleter;
+	/** 提示符 */
+	prompt?: string;
+	/** 是否保留历史记录（默认 true） */
+	history?: boolean;
+}
