@@ -217,6 +217,102 @@ cli
     cli.logWithPrefix('[NAMES]', `已注册事件: ${testCli.eventNames().join(', ')}`);
     cli.newline();
 
+    // ═══════════════════════════════════════════
+    //  v1.3.0 新功能演示
+    // ═══════════════════════════════════════════
+
+    cli.newline().divider('=', 50).newline();
+    cli.printBanner('v1.3.0 New Features');
+    cli.info('displayTable / displayJSON / ANSI / SpinnerProgress / Silent / Color');
+    cli.newline();
+
+    // 1. displayTable 格式B
+    cli.logBold('[1] displayTable 格式B (简单格式)');
+    cli.displayTable({
+      headers: ['Name', 'Version', 'License'],
+      rows: [
+        ['cli-tools', '1.3.0', 'GPLv3'],
+        ['event-emitter', '1.2.0', 'MIT'],
+      ],
+    });
+    cli.newline();
+
+    // 2. displayTable 格式A
+    cli.logBold('[2] displayTable 格式A (对象数组 + 列定义)');
+    cli.displayTable({
+      columns: [
+        { key: 'name', label: '包名', align: 'left' },
+        { key: 'size', label: '大小(kB)', align: 'right' },
+        { key: 'status', label: '状态', align: 'center' },
+      ],
+      rows: [
+        { name: 'cli-tools', size: '18.5', status: 'OK' },
+        { name: 'types', size: '2.1', status: 'OK' },
+        { name: 'index', size: '0.3', status: 'OK' },
+      ],
+      row_count: 3,
+    });
+    cli.newline();
+
+    // 3. displayJSON
+    cli.logBold('[3] displayJSON (带语法高亮)');
+    cli.displayJSON({
+      name: 'wbw-cli-tools-lib',
+      version: '1.3.0',
+      features: ['commander', 'inquirer', 'ora', 'chalk', 'figlet'],
+      config: { color: true, cursor: true },
+    });
+    cli.newline();
+
+    // 4. ANSI 光标移动
+    cli.logBold('[4] ANSI 光标移动');
+    cli.print('光标移动演示: ');
+    cli.moveToColumn(20).print('列20');
+    cli.moveToColumn(35).print('列35');
+    cli.newline();
+    cli.newline();
+
+    // 5. spinnerProgress
+    cli.logBold('[5] spinnerProgress 进度条');
+    cli.spinnerStart('处理中');
+    for (let i = 0; i <= 100; i += 20) {
+      cli.spinnerProgress(i, 100, '处理中');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    cli.spinnerSucceed('完成!');
+    cli.newline();
+
+    // 6. silent 模式
+    cli.logBold('[6] silent 静默模式');
+    cli.print('静默前: 这行可见');
+    cli.silent();
+    cli.print('静默中: 这行不可见');
+    cli.setLogger({ level: 'info', log: (...a) => process.stdout.write(a.join(' ') + '\n') });
+    cli.print('恢复后: 这行又可见了');
+    cli.logWithPrefix('[INFO]', `isSilent: ${cli.isSilent()}`);
+    cli.newline();
+
+    // 7. color 方法
+    cli.logBold('[7] color 通用颜色方法');
+    cli.color('红色警告', 'red');
+    cli.color('绿色成功', 'green');
+    cli.color('黄色警告', 'yellow');
+    cli.color('青色信息', 'cyan');
+    cli.newline();
+
+    // 8. chalk getter
+    cli.logBold('[8] chalk 高级用法');
+    cli.print(cli.chalk.underline.bold.magenta('自定义样式文本'));
+    cli.newline();
+
+    // 9. setPrompt
+    cli.logBold('[9] setPrompt / readlineLine / readlineCursor');
+    cli.getReadlineInterface();
+    cli.setPrompt('custom> ');
+    cli.logGray(`当前提示符已设置为 custom>`);
+    cli.closeReadline();
+    cli.newline();
+
     cli.newline().divider('=', 50).newline();
     cli.printBanner('Done!');
   });

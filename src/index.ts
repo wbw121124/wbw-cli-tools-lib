@@ -19,4 +19,10 @@ export type {
 	EventEmitterOptions,
 	EventHistoryEntry,
 	EventMiddleware,
+	TableColumn,
+	DisplayTableOptions,
+	DisplayTableOptionsA,
+	DisplayTableOptionsB,
+	DisplayJSONOptions,
+	SilentLogger,
 } from './types.js';

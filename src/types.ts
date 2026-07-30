@@ -233,3 +233,83 @@ export type EventMiddleware<T = Record<string, unknown>> = (
 	data: T[keyof T],
 	next: () => void,
 ) => void;
+
+// ═══════════════════════════════════════════
+//  displayTable / displayJSON 类型
+// ═══════════════════════════════════════════
+
+/**
+ * 表格列定义（格式A）
+ * @public
+ */
+export interface TableColumn {
+	/** 数据键名 */
+	key: string;
+	/** 列标题（默认使用 key） */
+	label?: string;
+	/** 对齐方式（默认 'left'） */
+	align?: 'left' | 'center' | 'right';
+	/** 固定列宽 */
+	width?: number;
+}
+
+/**
+ * 表格选项（格式A：对象数组 + 列定义）
+ * @public
+ */
+export interface DisplayTableOptionsA {
+	/** 列定义 */
+	columns: TableColumn[];
+	/** 数据行 */
+	rows: Record<string, unknown>[];
+	/** 总行数信息 */
+	row_count?: number;
+	/** 最大列宽（默认 30） */
+	maxColWidth?: number;
+	/** 表头样式（默认 'bold'） */
+	headerStyle?: 'bold' | 'underline' | 'none';
+}
+
+/**
+ * 表格选项（格式B：简单 headers + rows）
+ * @public
+ */
+export interface DisplayTableOptionsB {
+	/** 表头名称 */
+	headers: string[];
+	/** 数据行（二维数组） */
+	rows: (string | number)[][];
+	/** 底部文字 */
+	footer?: string;
+}
+
+/**
+ * 表格显示选项（联合类型）
+ * @public
+ */
+export type DisplayTableOptions = DisplayTableOptionsA | DisplayTableOptionsB;
+
+/**
+ * JSON 显示选项
+ * @public
+ */
+export interface DisplayJSONOptions {
+	/** 缩进空格数（默认 2） */
+	indent?: number;
+	/** 是否彩色（默认 true） */
+	colors?: boolean;
+	/** 最大展开深度（默认 10） */
+	maxDepth?: number;
+}
+
+// ═══════════════════════════════════════════
+//  输出重定向类型
+// ═══════════════════════════════════════════
+
+/**
+ * 静默 Logger（所有方法为空操作）
+ * @public
+ */
+export interface SilentLogger extends Logger {
+	level: 'error';
+}

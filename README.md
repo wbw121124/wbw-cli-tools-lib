@@ -454,3 +454,123 @@ cli.removeAllEventListeners();  // 清空所有监听器
 ## 许可证
 
 GPLv3.0-only
+
+## v1.3.0 新增 API
+
+### displayTable
+
+支持两种数据格式：
+
+```ts
+// 格式B：简单格式
+cli.displayTable({
+  headers: ['Name', 'Version'],
+  rows: [['cli-tools', '1.3.0']],
+  footer: '(2 rows)',
+});
+
+// 格式A：对象数组 + 列定义
+cli.displayTable({
+  columns: [
+    { key: 'name', label: '包名', align: 'left', width: 20 },
+    { key: 'size', label: '大小', align: 'right' },
+  ],
+  rows: [{ name: 'cli-tools', size: '18.5' }],
+  row_count: 1,
+  maxColWidth: 30,
+  headerStyle: 'bold', // 'bold' | 'underline' | 'none'
+});
+```
+
+| 选项 | 说明 |
+|------|------|
+| `columns` | 列定义数组（格式A） |
+| `headers` | 表头名称数组（格式B） |
+| `rows` | 数据行 |
+| `footer` | 底部文字（格式B） |
+| `row_count` | 总行数信息（格式A） |
+| `maxColWidth` | 最大列宽，默认30 |
+| `headerStyle` | 表头样式：bold/underline/none |
+
+### displayJSON
+
+```ts
+cli.displayJSON({ name: 'cli-tools', version: '1.3.0' });
+cli.displayJSON(data, { indent: 4, colors: false });
+```
+
+| 选项 | 说明 |
+|------|------|
+| `indent` | 缩进空格数，默认2 |
+| `colors` | 是否彩色，默认true |
+| `maxDepth` | 最大展开深度，默认10 |
+
+### Readline 增强
+
+| 方法/属性 | 说明 |
+|-----------|------|
+| `readlineLine` | 获取当前输入行内容 |
+| `readlineCursor` | 获取当前光标位置 |
+| `setPrompt(prompt)` | 设置提示符 |
+| `prompt()` | 显示提示符 |
+| `createCustomReadline(options?)` | 创建独立的 readline 接口 |
+
+### ANSI 辅助
+
+| 方法 | 说明 |
+|------|------|
+| `clearCurrentLine()` | 清除当前行 |
+| `moveToColumn(n)` | 移动光标到指定列 |
+| `moveUp(n?)` | 光标上移 n 行 |
+| `moveDown(n?)` | 光标下移 n 行 |
+| `moveCursorTo(x, y)` | 移动光标到绝对位置 |
+
+### Spinner 增强
+
+| 方法 | 说明 |
+|------|------|
+| `spinnerUpdate(text)` | 更新 Spinner 文本 |
+| `spinnerProgress(current, total, text?)` | 显示进度条 |
+
+```ts
+cli.spinnerStart('加载中...');
+for (let i = 0; i <= 100; i++) {
+  cli.spinnerProgress(i, 100, '加载中...');
+  await new Promise(r => setTimeout(r, 50));
+}
+cli.spinnerSucceed('完成!');
+// 输出: [===============>        ] 75% 加载中...
+```
+
+### 输出重定向
+
+| 方法 | 说明 |
+|------|------|
+| `setOutput(stream)` | 重定向输出到流 |
+| `setLogger(logger)` | 替换日志器 |
+| `silent()` | 静默模式（所有输出被忽略） |
+| `isSilent()` | 检查是否静默模式 |
+
+```ts
+import { createWriteStream } from 'node:fs';
+
+cli.setOutput(createWriteStream('output.log'));
+cli.silent(); // 所有输出被忽略
+cli.isSilent(); // true
+```
+
+### 颜色辅助
+
+| 方法/属性 | 说明 |
+|-----------|------|
+| `chalk` | 获取 chalk 实例（高级用法） |
+| `color(text, colorName)` | 通用颜色输出方法 |
+
+```ts
+// chalk 高级用法
+cli.print(cli.chalk.underline.bold.red('样式文本'));
+
+// color 通用方法
+cli.color('红色文本', 'red');
+cli.color('绿色文本', 'green');
+```

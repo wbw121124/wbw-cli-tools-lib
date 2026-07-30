@@ -30,6 +30,10 @@ import type {
 	ReadlineCompleter,
 	EventHistoryEntry,
 	EventMiddleware,
+	DisplayTableOptions,
+	DisplayTableOptionsA,
+	DisplayTableOptionsB,
+	DisplayJSONOptions,
 } from './types.js';
 import type { ReadlinePromiseInterface } from 'readline-promise';
 import type { ReadlinePromiseModule } from 'readline-promise';
@@ -80,6 +84,7 @@ export class CliTools {
 	private _emitter: EventEmitter<CliToolsEventMap>;
 	private _config: Record<string, unknown> = {};
 	private _readlineInterface: ReadlinePromiseInterface | null = null;
+	private _silent = false;
 
 	private constructor(options: CliToolsOptions = {}) {
 		this._options = {
@@ -1458,6 +1463,458 @@ export class CliTools {
 		if (rl) {
 			const hist = (rl as unknown as { history: string[] }).history;
 			if (Array.isArray(hist)) hist.length = 0;
+		}
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Readline 增强
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 获取当前输入行内容
+	 *
+	 * @returns 当前行文本
+	 */
+	get readlineLine(): string {
+		return this._readlineInterface?.line ?? '';
+	}
+
+	/**
+	 * 获取当前光标位置
+	 *
+	 * @returns 光标偏移量
+	 */
+	get readlineCursor(): number {
+		return (this._readlineInterface as unknown as { cursor?: number })?.cursor ?? 0;
+	}
+
+	/**
+	 * 设置提示符
+	 *
+	 * @param prompt - 提示符文本
+	 * @returns 当前实例
+	 */
+	setPrompt(prompt: string): this {
+		this._readlineInterface?.setPrompt(prompt);
+		return this;
+	}
+
+	/**
+	 * 显示提示符
+	 *
+	 * @returns 当前实例
+	 */
+	prompt(): this {
+		this._readlineInterface?.prompt();
+		return this;
+	}
+
+	/**
+	 * 创建独立的 readline 接口（不存储到内部单例）
+	 *
+	 * @param options - readline 配置选项
+	 * @returns 独立的 readline-promise 接口
+	 */
+	createCustomReadline(options?: ReadlineInterfaceOptions): ReadlinePromiseInterface {
+		const completer = options?.completer;
+		const terminal = options?.terminal ?? true;
+
+		return readline.createInterface({
+			input: process.stdin,
+			output: process.stdout,
+			completer: completer as nodeReadline.Completer | nodeReadline.AsyncCompleter | undefined,
+			terminal,
+		});
+	}
+
+	// ═══════════════════════════════════════════
+	//  displayTable / displayJSON
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 显示格式化表格
+	 *
+	 * 支持两种数据格式：
+	 * - 格式A：对象数组 + 列定义（带对齐、宽度控制）
+	 * - 格式B：简单 headers + 二维数组
+	 *
+	 * @param options - 表格选项
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * // 格式A
+	 * cli.displayTable({
+	 *   columns: [
+	 *     { key: 'name', label: '名称', align: 'left' },
+	 *     { key: 'version', label: '版本', align: 'center' },
+	 *   ],
+	 *   rows: [
+	 *     { name: 'cli-tools', version: '1.0.0' },
+	 *     { name: 'utils', version: '2.3.1' },
+	 *   ],
+	 *   row_count: 2,
+	 * });
+	 *
+	 * // 格式B
+	 * cli.displayTable({
+	 *   headers: ['Name', 'Age'],
+	 *   rows: [['Alice', 30], ['Bob', 25]],
+	 * });
+	 * ```
+	 */
+	displayTable(options: DisplayTableOptions): this {
+		if ('headers' in options) {
+			return this._displayTableSimple(options as DisplayTableOptionsB);
+		}
+		return this._displayTableAdvanced(options as DisplayTableOptionsA);
+	}
+
+	/**
+	 * 显示格式化 JSON
+	 *
+	 * @param data - 要显示的数据
+	 * @param options - 显示选项
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.displayJSON({ name: 'cli-tools', version: '1.0.0' });
+	 * cli.displayJSON(data, { indent: 4, colors: false });
+	 * ```
+	 */
+	displayJSON(data: unknown, options?: DisplayJSONOptions): this {
+		const { indent = 2, colors = true } = options ?? {};
+
+		try {
+			const seen = new WeakSet();
+			const raw = JSON.stringify(data, (_key, value) => {
+				if (typeof value === 'object' && value !== null) {
+					if (seen.has(value)) return '[Circular]';
+					seen.add(value);
+				}
+				return value;
+			}, indent);
+
+			if (!colors) {
+				this._out(raw);
+				return this;
+			}
+
+			const colored = raw
+				.replace(/"([^"]+)":/g, (_m, p1) => `${chalk.cyan(`"${p1}"`)}:`)
+				.replace(/: "([^"]*?)"/g, (_m, p1) => `: ${chalk.green(`"${p1}"`)}`)
+				.replace(/: (\d+\.?\d*)/g, (_m, p1) => `: ${chalk.yellow(p1)}`)
+				.replace(/: (true|false)/g, (_m, p1) => `: ${chalk.gray(p1)}`)
+				.replace(/: (null)/g, (_m, p1) => `: ${chalk.gray(p1)}`);
+
+			this._out(colored);
+		} catch (e) {
+			this._out(String(data));
+		}
+		return this;
+	}
+
+	/** @private */
+	private _displayTableSimple(options: DisplayTableOptionsB): this {
+		const { headers, rows, footer } = options;
+
+		const colWidths = headers.map((h, i) => {
+			const maxDataWidth = Math.max(...rows.map(r => String(r[i] ?? '').length), 0);
+			return Math.max(h.length, maxDataWidth);
+		});
+
+		const pad = (text: string, width: number) => text.padEnd(width);
+		const line = (left: string, mid: string, right: string, fill: string) =>
+			left + colWidths.map(w => fill.repeat(w + 2)).join(mid) + right;
+
+		const output: string[] = [];
+		output.push(line('┌', '┬', '┐', '─'));
+		output.push('│ ' + headers.map((h, i) => pad(h, colWidths[i])).join(' │ ') + ' │');
+		output.push(line('├', '┼', '┤', '─'));
+		for (const row of rows) {
+			output.push('│ ' + headers.map((_, i) => pad(String(row[i] ?? ''), colWidths[i])).join(' │ ') + ' │');
+		}
+		output.push(line('└', '┴', '┘', '─'));
+		if (footer) output.push(footer);
+
+		this._out(output.join('\n'));
+		return this;
+	}
+
+	/** @private */
+	private _displayTableAdvanced(options: DisplayTableOptionsA): this {
+		const { columns, rows, row_count, maxColWidth = 30, headerStyle = 'bold' } = options;
+
+		const colWidths = columns.map(col => {
+			const labelWidth = col.label?.length ?? col.key.length;
+			const maxDataWidth = Math.max(
+				...rows.map(r => String(r[col.key] ?? '').length),
+				0,
+			);
+			return col.width ?? Math.min(Math.max(labelWidth, maxDataWidth), maxColWidth);
+		});
+
+		const alignText = (text: string, width: number, align: 'left' | 'center' | 'right'): string => {
+			const truncated = text.length > width ? text.slice(0, width - 3) + '...' : text;
+			if (align === 'center') {
+				const left = Math.floor((width - truncated.length) / 2);
+				const right = width - truncated.length - left;
+				return ' '.repeat(left) + truncated + ' '.repeat(right);
+			}
+			if (align === 'right') return truncated.padStart(width);
+			return truncated.padEnd(width);
+		};
+
+		const formatHeader = (text: string): string => {
+			if (headerStyle === 'bold') return chalk.bold(text);
+			if (headerStyle === 'underline') return chalk.underline(text);
+			return text;
+		};
+
+		const line = (left: string, mid: string, right: string, fill: string) =>
+			left + colWidths.map(w => fill.repeat(w + 2)).join(mid) + right;
+
+		const output: string[] = [];
+		output.push(line('┌', '┬', '┐', '─'));
+		output.push(
+			'│ '
+			+ columns.map((col, i) =>
+				formatHeader(alignText(col.label ?? col.key, colWidths[i], col.align ?? 'left')),
+			).join(' │ ')
+			+ ' │',
+		);
+		output.push(line('├', '┼', '┤', '─'));
+		for (const row of rows) {
+			output.push(
+				'│ '
+				+ columns.map((col, i) =>
+					alignText(String(row[col.key] ?? ''), colWidths[i], col.align ?? 'left'),
+				).join(' │ ')
+				+ ' │',
+			);
+		}
+		output.push(line('└', '┴', '┘', '─'));
+		if (row_count !== undefined) {
+			output.push(`(${row_count} rows)`);
+		}
+
+		this._out(output.join('\n'));
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  ANSI 辅助方法
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 清除当前行
+	 *
+	 * @returns 当前实例
+	 */
+	clearCurrentLine(): this {
+		readline.clearLine(process.stdout, 0);
+		return this;
+	}
+
+	/**
+	 * 移动光标到指定列
+	 *
+	 * @param column - 列号（从 1 开始）
+	 * @returns 当前实例
+	 */
+	moveToColumn(column: number): this {
+		process.stdout.write(`\x1b[${column}G`);
+		return this;
+	}
+
+	/**
+	 * 光标上移
+	 *
+	 * @param n - 移动行数（默认 1）
+	 * @returns 当前实例
+	 */
+	moveUp(n?: number): this {
+		process.stdout.write(n !== undefined ? `\x1b[${n}A` : '\x1b[A');
+		return this;
+	}
+
+	/**
+	 * 光标下移
+	 *
+	 * @param n - 移动行数（默认 1）
+	 * @returns 当前实例
+	 */
+	moveDown(n?: number): this {
+		process.stdout.write(n !== undefined ? `\x1b[${n}B` : '\x1b[B');
+		return this;
+	}
+
+	/**
+	 * 移动光标到绝对位置
+	 *
+	 * @param x - 列位置
+	 * @param y - 行位置
+	 * @returns 当前实例
+	 */
+	moveCursorTo(x: number, y: number): this {
+		process.stdout.write(`\x1b[${y};${x}H`);
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  Spinner 增强
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 更新 Spinner 文本（别名）
+	 *
+	 * @param text - 新文本
+	 * @returns 当前实例
+	 */
+	spinnerUpdate(text: string): this {
+		return this.spinnerText(text);
+	}
+
+	/**
+	 * 显示进度条 Spinner
+	 *
+	 * @param current - 当前进度
+	 * @param total - 总数
+	 * @param text - 附加文本
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.spinnerStart('加载中...');
+	 * for (let i = 0; i <= 100; i++) {
+	 *   cli.spinnerProgress(i, 100, '加载中...');
+	 *   await new Promise(r => setTimeout(r, 50));
+	 * }
+	 * cli.spinnerSucceed('完成!');
+	 * ```
+	 */
+	spinnerProgress(current: number, total: number, text?: string): this {
+		if (!this._spinner) return this;
+
+		const pct = Math.min(Math.max(Math.round((current / total) * 100), 0), 100);
+		const barWidth = 20;
+		const filled = Math.round((pct / 100) * barWidth);
+		const empty = barWidth - filled;
+		const bar = '='.repeat(filled) + '>' + ' '.repeat(Math.max(empty - 1, 0));
+		const suffix = text ? ` ${text}` : '';
+		this._spinner.text = `[${bar}] ${pct}%${suffix}`;
+		return this;
+	}
+
+	// ═══════════════════════════════════════════
+	//  输出重定向
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 重定向输出到新的 WriteStream
+	 *
+	 * @param stream - 输出流
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * import { createWriteStream } from 'node:fs';
+	 * cli.setOutput(createWriteStream('output.log'));
+	 * ```
+	 */
+	setOutput(stream: NodeJS.WritableStream): this {
+		this._options.logger = {
+			...this._options.logger,
+			log: (...args: unknown[]) => stream.write(args.join(' ') + '\n'),
+		};
+		return this;
+	}
+
+	/**
+	 * 替换日志器
+	 *
+	 * @param logger - 新的日志器
+	 * @returns 当前实例
+	 */
+	setLogger(logger: Logger): this {
+		this._options.logger = logger;
+		return this;
+	}
+
+	/**
+	 * 静默模式（所有输出被忽略）
+	 *
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.silent();
+	 * cli.print('这行不会显示'); // 无输出
+	 * ```
+	 */
+	silent(): this {
+		this._silent = true;
+		this._options.logger = {
+			level: 'error',
+			log: () => {},
+			error: () => {},
+			warn: () => {},
+			info: () => {},
+			debug: () => {},
+		};
+		return this;
+	}
+
+	/**
+	 * 检查是否处于静默模式
+	 *
+	 * @returns 是否静默
+	 */
+	isSilent(): boolean {
+		return this._silent;
+	}
+
+	// ═══════════════════════════════════════════
+	//  颜色辅助
+	// ═══════════════════════════════════════════
+
+	/**
+	 * 获取 chalk 实例（高级用法）
+	 *
+	 * @returns chalk 实例
+	 *
+	 * @example
+	 * ```ts
+	 * const styled = cli.chalk.underline.bold.red('警告');
+	 * cli.print(styled);
+	 * ```
+	 */
+	get chalk(): typeof chalk {
+		return chalk;
+	}
+
+	/**
+	 * 通用颜色输出方法
+	 *
+	 * @param text - 文本内容
+	 * @param colorName - chalk 颜色名称
+	 * @returns 当前实例
+	 *
+	 * @example
+	 * ```ts
+	 * cli.color('错误信息', 'red');
+	 * cli.color('警告信息', 'yellow');
+	 * cli.color('成功信息', 'green');
+	 * ```
+	 */
+	color(text: string, colorName: string): this {
+		const fn = (chalk as unknown as Record<string, (s: string) => string>)[colorName];
+		if (typeof fn === 'function') {
+			this._out(fn(text));
+		} else {
+			this._out(text);
 		}
 		return this;
 	}
